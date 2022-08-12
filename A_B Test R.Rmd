@@ -1,0 +1,46 @@
+---
+title: "A/B Testing"
+author: "Lauren Wagner"
+date: '2022-08-11'
+output: html_document
+---
+
+```{r, echo=FALSE, message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(mosaic)
+```
+
+
+```{r}
+ab_data <- read.csv("~/Downloads/ab_data.csv")
+```
+
+```{r}
+# Cleaning Data
+ab_clean <- ab_data %>% distinct(user_id, .keep_all = TRUE)
+ab_clean <- na.omit(ab_clean)
+ab_clean$group <- as.factor(ab_clean$group)
+ab_clean$landing_page <- as.factor(ab_clean$landing_page)
+ab_clean$converted <- factor(ab_clean$converted, levels = c("1", "0"))
+ab_clean <- ab_clean %>% 
+  filter((group == "control" && landing_page == "old_page") || 
+           (group == "treatment" && landing_page == "new_page"))
+```
+
+```{r}
+# Simple Data Exploration
+ggplot(data=ab_clean, aes(x=group, fill=converted)) + geom_bar(position="fill")
+tally(ab_clean$converted ~ ab_clean$group, format="percent")
+```
+
+```{r}
+#Pearson's Chi-Squared Test
+prop <- table(ab_clean$group, ab_clean$converted)
+prop.test(prop)
+```
+
+
+
+
+
