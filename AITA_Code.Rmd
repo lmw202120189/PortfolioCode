@@ -1,0 +1,256 @@
+---
+title: "Am I The Asshole?"
+author: "Lauren Wagner"
+date: '2022-07-23'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(72)
+library(dplyr)
+library(quanteda)
+library(ggplot2)
+library(quanteda.dictionaries)
+library(quanteda.textplots)
+library(quanteda.textstats)
+library(quanteda.textmodels)
+library(mosaic)
+library(RedditExtractoR)
+library(seededlda)
+library(glmnet)
+```
+
+```{r}
+#reading in data and sampling from it
+aita <- read.csv("/Users/laurenwagner/aita_clean.csv")
+aitaLong <- aita[nchar(aita$body)>25, ]
+aitaLong$verdict <- as.factor(aitaLong$verdict)
+aita_NTA <- aitaLong %>%
+  filter(verdict == "not the asshole") %>%
+  sample_n(5000, replace=FALSE)
+aita_YTA <- aitaLong %>%
+  filter(verdict == "asshole") %>%
+  sample_n(5000, replace=FALSE)
+a <- rbind(aita_NTA, aita_YTA)
+a$verdict <- droplevels(a$verdict)
+```
+
+```{r}
+#corpus, tokens, dfm
+r_corp <- corpus(a, text_field="body")
+r_toks <- tokens(r_corp, remove_punct = TRUE, remove_symbols = TRUE, remove_numbers = TRUE, remove_url = TRUE)
+r_dfm <- dfm(r_toks, tolower = TRUE, remove = stopwords('en'))
+```
+
+```{r}
+#different features
+r_summary <- textstat_summary(r_corp)
+a$length <- r_summary$chars
+a$punctuation <- r_summary$puncts
+lexdiv <- textstat_lexdiv(r_dfm)
+a$lexdiv <- lexdiv$TTR
+readability <- textstat_readability(r_corp)
+a$readability <- readability$Flesch
+```
+
+```{r}
+# keyness analysis
+grouped_posts <- dfm_group(r_dfm, groups = verdict)
+head(grouped_posts)
+tstat2 <- textstat_keyness(grouped_posts)
+head(tstat2, 10) # asshole posts
+tail(tstat2, 10) # not asshole posts
+```
+
+```{r}
+dev.new(width = 1000, height = 1000, unit = "px")
+textplot_wordcloud(grouped_posts, comparison = TRUE, max_words = 120,color = c("red", "blue"))
+```
+
+```{r}
+#filturls <- read.csv("~/Desktop/masters/filturls.csv", sep="")
+#cont <- get_thread_content(filturls$url)
+#save(cont, file="content.rda")
+load('/Users/laurenwagner/content.rda')
+View(cont$threads)
+debated <- cont$threads
+comments <- cont$comments
+View(comments)
+topcom <- comments[comments$comment_id == "2", ]
+View(topcom)
+```
+
+```{r}
+topcom$comment <- tolower(topcom$comment)
+topcom$ruling <- ifelse(grepl("nta|nah",topcom$comment),'not the asshole', ifelse(grepl("yta|esh",topcom$comment),'asshole',"N/A"))
+debated$verdict <- topcom$ruling
+debated <- debated[debated$verdict != "N/A", ]
+debated$verdict <- as.factor(debated$verdict)
+summary(debated$verdict)
+```
+
+```{r}
+filt_corp <- corpus(debated, text_field="text")
+filt_toks <- tokens(filt_corp, remove_punct = TRUE, remove_symbols = TRUE, remove_numbers = TRUE, remove_url = TRUE)
+filt_dfm <- dfm(filt_toks, tolower = TRUE, remove = stopwords('en'))
+filt_summary <- textstat_summary(filt_corp)
+favstats(filt_summary$chars)
+favstats(filt_summary$sents)
+```
+
+```{r}
+filt_group <- dfm_group(filt_dfm, groups = verdict)
+dev.new(width = 1000, height = 1000, unit = "px")
+textplot_wordcloud(filt_group, comparison = TRUE, max_words = 100,color = c("red", "blue"))
+```
+
+```{r}
+r_dfm2 <- dfm_trim(r_dfm, min_termfreq = 0.0005, termfreq_type = "prop")
+r_dfm2 <- dfm_remove(r_dfm2, stopwords("english"))
+```
+
+
+```{r}
+# this takes a significant amount of time, which is why I am not reruning on knit
+#topic_mods <- c()
+#for(i in 2:15){
+#  temp_top <- textmodel_lda(r_dfm2, k=i)
+#  print(terms(temp_top, 10))
+#  topic_mods <- append(topic_mods, temp_top)
+#}
+```
+
+```{r}
+#topic_mod <- textmodel_lda(r_dfm2, k=7)
+#print(terms(topic_mod, 10))
+#save(topic_mod, file="topicModel.rda")
+```
+
+
+```{r}
+load('/Users/laurenwagner/topicModel.rda')
+print(terms(topic_mod, 10))
+```
+
+
+```{r}
+top <- topics(topic_mod)
+a$topic <- as.vector(top)
+a$topic <- as.factor(a$topic)
+tally(a$verdict~a$topic, format="proportion")
+```
+
+```{r}
+unusedAITA <- subset(aitaLong, !(aitaLong$id %in% a$id))
+val_NTA <- unusedAITA %>%
+  filter(verdict == "not the asshole") %>%
+  sample_n(1000, replace=FALSE)
+val_YTA <- unusedAITA %>%
+  filter(verdict == "asshole") %>%
+  sample_n(1000, replace=FALSE)
+val_post <- rbind(val_NTA, val_YTA)
+common_cols <- intersect(colnames(a), colnames(val_post))
+all_posts <- rbind(
+  subset(a, select = common_cols), 
+  subset(val_post, select = common_cols)
+)
+```
+
+```{r}
+debated$body <- debated$text
+common_cols2 <- intersect(colnames(all_posts), colnames(debated))
+all_posts <- rbind(
+  subset(all_posts, select = common_cols2), 
+  subset(debated, select = common_cols2)
+) 
+all_posts$verdict <- droplevels(all_posts$verdict)
+```
+
+```{r}
+train_index <- c(1:10000)
+train_corp <- corpus(all_posts, text_field="body")
+train_toks <- tokens(train_corp, remove_punct = TRUE, remove_symbols = TRUE, remove_numbers = TRUE, remove_url = TRUE)
+train_dfm <- dfm(train_toks, tolower = TRUE, remove = stopwords('en'))
+train_dfm <- dfm_trim(train_dfm, min_termfreq = 5)
+nb <- textmodel_nb(train_dfm, docvars(train_corp, "verdict")[train_index])
+```
+```{r}
+preds <- predict(nb, newdata = train_dfm[10001:12000,])
+val_post$predicted <- preds
+```
+
+```{r}
+preds2 <- predict(nb, newdata = train_dfm[12001:12091,])
+debated$predicted <- preds2
+```
+
+```{r}
+tally(val_post$predicted ~ val_post$verdict, format="proportion")
+tally(debated$predicted ~ debated$verdict, format="proportion")
+```
+
+```{r}
+val_corp <- corpus(val_post, text_field="body")
+val_toks <- tokens(val_corp, remove_punct = TRUE, remove_symbols = TRUE, remove_numbers = TRUE, remove_url = TRUE)
+val_dfm <- dfm(val_toks, tolower = TRUE, remove = stopwords('en'))
+val_mod <- textmodel_lda(val_dfm, model=topic_mod)
+```
+
+```{r}
+val_top <- topics(val_mod)
+val_post$topic <- as.vector(val_top)
+val_post$topic <- as.factor(val_post$topic)
+val_post$verdict <- droplevels(val_post$verdict)
+val_post <- mutate(val_post, correct = ifelse(verdict == predicted, 1, 0))
+tally(val_post$correct~val_post$topic, format="proportion")
+```
+
+```{r}
+deb_mod <- textmodel_lda(filt_dfm, model=topic_mod)
+deb_top <- topics(deb_mod)
+debated$topic <- as.vector(deb_top)
+debated$topic <- as.factor(debated$topic)
+debated$verdict <- droplevels(debated$verdict)
+debated <- mutate(debated, correct = ifelse(verdict == predicted, 1, 0))
+tally(debated$correct~debated$topic, format="proportion")
+```
+
+```{r}
+all_posts <- mutate(all_posts, is_asshole = ifelse(verdict == "asshole", 1, 0))
+```
+
+```{r}
+lasso <- cv.glmnet(x=train_dfm[train_index,], y=all_posts$is_asshole[train_index],
+                   alpha=1, nfolds=5, family="binomial")
+```
+
+```{r}
+val_l_pred <- predict(lasso, train_dfm[10001:12000,], type='class')
+deb_l_pred <- predict(lasso, train_dfm[12001:12091,], type='class')
+val_post$lasso_pred <- val_l_pred
+debated$lasso_pred <- deb_l_pred
+```
+
+```{r}
+val_post <- mutate(val_post, lasso_fact=ifelse(lasso_pred==1, "asshole","not the asshole"))
+debated <- mutate(debated, lasso_fact=ifelse(lasso_pred==1, "asshole","not the asshole"))
+tally(val_post$lasso_fact ~ val_post$verdict, format="proportion")
+tally(debated$lasso_fact ~ debated$verdict, format="proportion")
+```
+
+```{r}
+debated <- mutate(debated, lcorrect = ifelse(verdict == lasso_fact, 1, 0))
+tally(debated$lcorrect~debated$topic, format="proportion")
+val_post <- mutate(val_post, lcorrect = ifelse(verdict == lasso_fact, 1, 0))
+tally(val_post$lcorrect~val_post$topic, format="proportion")
+```
+
+
+```{r}
+tally(val_post$lasso_fact ~ val_post$predicted, format="count")
+tally(debated$lasso_fact ~ debated$predicted, format="count")
+```
+
+
+
